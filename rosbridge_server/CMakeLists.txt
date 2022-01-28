@@ -14,6 +14,8 @@ catkin_install_python(PROGRAMS
   scripts/rosbridge_tcp
   scripts/rosbridge_udp
   scripts/rosbridge_udp.py
+  scripts/rosbridge_stomp
+  scripts/rosbridge_stomp.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

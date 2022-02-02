@@ -8,6 +8,11 @@ import stomp
 from rosbridge_library.rosbridge_protocol import RosbridgeProtocol
 from rosbridge_library.util import json
 
+def stomp_topic_name(ros_topic_name):
+    topic_name = ros_topic_name
+    if topic_name[0] == "/":
+        topic_name = topic_name[1:]
+    return topic_name
 
 class RosbridgeStompSocket(stomp.ConnectionListener):
     """
@@ -19,8 +24,8 @@ class RosbridgeStompSocket(stomp.ConnectionListener):
     authenticate = False
 
     # list of parameters
-    sub_stomp_topic = 'pub' # application's publisher channel
-    pub_stomp_topic = 'sub' # application's subscriber channel
+    client_command_topic = 'client-command' # application's publisher channel
+    server_command_topic = 'server-command' # application's subscriber channel
     reconnect_delay = -1
     # The following are passed on to RosbridgeProtocol
     # defragmentation.py:
@@ -50,7 +55,11 @@ class RosbridgeStompSocket(stomp.ConnectionListener):
         try:
             self.protocol = RosbridgeProtocol(cls.client_id_seed, parameters=parameters)
             self.protocol.outgoing = self.send_message
-            self.conn.subscribe(destination='/topic/'+self.sub_stomp_topic, id=self.protocol.client_id, ack='auto')
+            self.conn.subscribe(
+                destination='/topic/'+cls.client_command_topic,
+                id=cls.client_command_topic+str(self.protocol.client_id),
+                ack='auto'
+            )
             self.authenticated = False
             cls.client_id_seed += 1
             cls.clients_connected += 1
@@ -70,11 +79,10 @@ class RosbridgeStompSocket(stomp.ConnectionListener):
 
     def on_message(self, headers, body):
         cls = self.__class__
+        msg = json.loads(body)
         # check if we need to authenticate
         if cls.authenticate and not self.authenticated:
             try:
-                msg = json.loads(body)
-
                 if msg['op'] == 'auth':
                     # check the authorization information
                     auth_srv = rospy.ServiceProxy('authenticate', Authentication)
@@ -92,8 +100,21 @@ class RosbridgeStompSocket(stomp.ConnectionListener):
             except:
                 # proper error will be handled in the protocol class
                 self.protocol.incoming(body)
+        # no authentication required
         else:
-            # no authentication required
+            # If the client advertises a topic, create a stomp-subscriber to it
+            if msg['op'] == 'advertise':
+                self.conn.subscribe(
+                    destination='/topic/'+stomp_topic_name(msg['topic']),
+                    id=msg['topic']+str(self.protocol.client_id),
+                    ack='auto'
+                )
+            # If the client unadvertises a topic, delete the stomp-subscriber to it
+            if msg['op'] == 'unadvertise':
+                self.conn.unsubscribe(
+                    destination='/topic/'+stomp_topic_name(msg['topic']),
+                    id=msg['topic']+str(self.protocol.client_id)
+                )
             self.protocol.incoming(body)
 
     def on_disconnected(self):
@@ -112,4 +133,9 @@ class RosbridgeStompSocket(stomp.ConnectionListener):
 
     def send_message(self, message):
         cls = self.__class__
-        self.conn.send('/topic/'+cls.pub_stomp_topic, message)
+        # For published data, switch to the topic name in the message
+        topicName = cls.server_command_topic
+        msg = json.loads(message)
+        if msg['op'] == 'publish':
+            topicName = stomp_topic_name(msg['topic'])
+        self.conn.send('/topic/'+topicName, message)

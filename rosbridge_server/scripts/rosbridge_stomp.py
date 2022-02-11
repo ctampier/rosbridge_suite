@@ -28,6 +28,8 @@ if __name__ == "__main__":
     # Parameter handling                             #
     ##################################################
     RosbridgeStompSocket.reconnect_delay = rospy.get_param('~reconnect_delay', -1.0)  # seconds
+    RosbridgeStompSocket.use_history = rospy.get_param('~use_history', True)
+    RosbridgeStompSocket.history_length = rospy.get_param('~history_length', 100)
     heartbeat_producer = rospy.get_param('~heartbeat_producer', 0) # milliseconds
     heartbeat_consumer = rospy.get_param('~heartbeat_consumer', 0) # milliseconds
     user = rospy.get_param('~user', 'guest')
@@ -89,6 +91,17 @@ if __name__ == "__main__":
             RosbridgeStompSocket.reconnect_delay = float(sys.argv[idx])
         else:
             print("--reconnect_delay argument provided without a value.")
+            sys.exit(-1)
+
+    if "--use_history" in sys.argv:
+        RosbridgeStompSocket.use_history = True
+
+    if "--history_length" in sys.argv:
+        idx = sys.argv.index("--history_length") + 1
+        if idx < len(sys.argv):
+            RosbridgeStompSocket.history_length = int(sys.argv[idx])
+        else:
+            print("--history_length argument provided without a value.")
             sys.exit(-1)
 
     if "--fragment_timeout" in sys.argv:

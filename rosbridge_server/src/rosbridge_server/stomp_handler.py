@@ -4,15 +4,18 @@ import uuid
 from rosauth.srv import Authentication
 
 import stomp
+import pika
 
 from rosbridge_library.rosbridge_protocol import RosbridgeProtocol
 from rosbridge_library.util import json
 
 def stomp_topic_name(ros_topic_name):
     topic_name = ros_topic_name
+    # Remove first slash if present
     if topic_name[0] == "/":
         topic_name = topic_name[1:]
-    return topic_name
+    # Change all subsequent slashes for points
+    return topic_name.replace("/", ".")
 
 class RosbridgeStompSocket(stomp.ConnectionListener):
     """
@@ -24,9 +27,11 @@ class RosbridgeStompSocket(stomp.ConnectionListener):
     authenticate = False
 
     # list of parameters
-    client_command_topic = 'client-command' # application's publisher channel
-    server_command_topic = 'server-command' # application's subscriber channel
+    client_command_destination = '/topic/client-command' # application's publisher channel
+    server_command_destination = '/topic/server-command' # application's subscriber channel
     reconnect_delay = -1
+    use_history = True
+    history_length = 100
     # The following are passed on to RosbridgeProtocol
     # defragmentation.py:
     fragment_timeout = 600                  # seconds
@@ -36,9 +41,15 @@ class RosbridgeStompSocket(stomp.ConnectionListener):
     unregister_timeout = 10.0               # seconds
 
     def __init__(self, conn, user, password):
+        cls = self.__class__
+        # Define parameters
         self.conn = conn
         self.user = user
         self.password = password
+        if cls.use_history:
+            self.data_destination_prefix = '/exchange/'
+        else:
+            self.data_destination_prefix = '/topic/'
 
     def connect(self):
         self.conn.connect(self.user, self.password, wait=True)
@@ -53,12 +64,14 @@ class RosbridgeStompSocket(stomp.ConnectionListener):
         }
 
         try:
+            # Initialize Rosbridge protocol
             self.protocol = RosbridgeProtocol(cls.client_id_seed, parameters=parameters)
             self.protocol.outgoing = self.send_message
+            # STOMP subscription to rosbridge client commands
             self.conn.subscribe(
-                destination='/topic/'+cls.client_command_topic,
-                id=cls.client_command_topic+str(self.protocol.client_id),
-                ack='auto'
+                destination=cls.client_command_destination,
+                id=cls.client_command_destination+str(self.protocol.client_id),
+                ack='client'
             )
             self.authenticated = False
             cls.client_id_seed += 1
@@ -70,7 +83,8 @@ class RosbridgeStompSocket(stomp.ConnectionListener):
                 
         except Exception as exc:
             rospy.logerr("Unable to accept incoming connection.  Reason: %s", str(exc))
-        rospy.loginfo("Client connected.  %d clients total.", cls.clients_connected)
+        rospy.loginfo("Message Broker connected.  %d total connections.", cls.clients_connected)
+
         if cls.authenticate:
             rospy.loginfo("Awaiting proper authentication...")
 
@@ -105,16 +119,38 @@ class RosbridgeStompSocket(stomp.ConnectionListener):
             # If the client advertises a topic, create a stomp-subscriber to it
             if msg['op'] == 'advertise':
                 self.conn.subscribe(
-                    destination='/topic/'+stomp_topic_name(msg['topic']),
+                    destination=self.data_destination_prefix+stomp_topic_name(msg['topic']),
                     id=msg['topic']+str(self.protocol.client_id),
                     ack='auto'
                 )
             # If the client unadvertises a topic, delete the stomp-subscriber to it
             if msg['op'] == 'unadvertise':
                 self.conn.unsubscribe(
-                    destination='/topic/'+stomp_topic_name(msg['topic']),
+                    destination=self.data_destination_prefix+stomp_topic_name(msg['topic']),
                     id=msg['topic']+str(self.protocol.client_id)
                 )
+            # If the client subscribes a topic with use_history activated, create a new exchange in the server for it
+            if msg['op'] == 'subscribe' and cls.use_history:
+                # Connect with pika to create an exchange with history
+                connection = pika.BlockingConnection(
+                    pika.ConnectionParameters(
+                        host=self.conn.transport.current_host_and_port[0]
+                    )
+                )
+                channel = connection.channel()
+                channel.exchange_declare(
+                    exchange=stomp_topic_name(msg['topic']),
+                    exchange_type='x-recent-history',
+                    auto_delete=True,
+                    arguments={
+                        "x-recent-history-length": cls.history_length
+                    }
+                )
+                connection.close()
+            # If it's a client command, acknowledge the message
+            if cls.client_command_destination in headers['destination']:
+                self.conn.ack(headers['message-id'], cls.client_command_destination+str(self.protocol.client_id))
+            # Forward the message to the protocol
             self.protocol.incoming(body)
 
     def on_disconnected(self):
@@ -122,10 +158,10 @@ class RosbridgeStompSocket(stomp.ConnectionListener):
             return  # Closed before connection was opened.
         cls = self.__class__
         cls.clients_connected -= 1
-
+        self.protocol.finish()
         if cls.client_manager:
             cls.client_manager.remove_client(self.client_id, self.host_ip)
-        rospy.loginfo("Client disconnected. %d clients total.", cls.clients_connected)
+        rospy.loginfo("Message Broker disconnected. %d total connections.", cls.clients_connected)
         if cls.reconnect_delay >= 0:
             rospy.loginfo("Will try to reconnect afer %d seconds", cls.reconnect_delay)
             rospy.sleep(cls.reconnect_delay)
@@ -133,9 +169,9 @@ class RosbridgeStompSocket(stomp.ConnectionListener):
 
     def send_message(self, message):
         cls = self.__class__
-        # For published data, switch to the topic name in the message
-        topicName = cls.server_command_topic
+        # For published data, switch to the topic name in the message with the configured prefix.
+        destination = cls.server_command_destination
         msg = json.loads(message)
         if msg['op'] == 'publish':
-            topicName = stomp_topic_name(msg['topic'])
-        self.conn.send('/topic/'+topicName, message)
+            destination = self.data_destination_prefix + stomp_topic_name(msg['topic'])
+        self.conn.send(destination, message, headers={"mandatory": True})

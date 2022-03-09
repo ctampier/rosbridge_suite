@@ -5,7 +5,7 @@
   <arg name="user" default="guest" />
   <arg name="password" default="guest" />
 
-  <arg name="reconnect_delay" default="-1.0" />
+  <arg name="reconnect_delay" default="1.0" />
   <arg name="heartbeat_producer" default="0" />
   <arg name="heartbeat_consumer" default="0" />
   <arg name="use_history" default="true"/>

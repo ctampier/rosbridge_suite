@@ -1,5 +1,6 @@
 import rospy
 import uuid
+import re
 
 from rosauth.srv import Authentication
 
@@ -29,6 +30,7 @@ class RosbridgeStompSocket(stomp.ConnectionListener):
     # list of parameters
     client_command_destination = '/topic/client-command' # application's publisher channel
     server_command_destination = '/topic/server-command' # application's subscriber channel
+    data_destination_prefix = '/exchange/'
     reconnect_delay = -1
     use_history = True
     history_length = 100
@@ -41,15 +43,10 @@ class RosbridgeStompSocket(stomp.ConnectionListener):
     unregister_timeout = 10.0               # seconds
 
     def __init__(self, conn, user, password):
-        cls = self.__class__
         # Define parameters
         self.conn = conn
         self.user = user
         self.password = password
-        if cls.use_history:
-            self.data_destination_prefix = '/exchange/'
-        else:
-            self.data_destination_prefix = '/topic/'
 
     def connect(self):
         self.conn.connect(self.user, self.password, wait=True)
@@ -90,6 +87,15 @@ class RosbridgeStompSocket(stomp.ConnectionListener):
 
     def on_error(self, headers, body):
         rospy.logerr('Received an error: "%s"', body)
+        if 'NOT_FOUND' in body:
+            # Search for an exchange name in the error text
+            exchange_name = re.findall(r"exchange '([^']*)'", body)[0]
+            if exchange_name:
+                # Translate to topic name
+                topic_name = '/' + exchange_name.replace(".", "/")
+                # Forward unsubscribe to the found topic to the protocol
+                msg = {'op': 'unsubscribe', 'topic': topic_name}
+                self.protocol.incoming(json.dumps(msg))
 
     def on_message(self, headers, body):
         cls = self.__class__
@@ -129,23 +135,36 @@ class RosbridgeStompSocket(stomp.ConnectionListener):
                     destination=self.data_destination_prefix+stomp_topic_name(msg['topic']),
                     id=msg['topic']+str(self.protocol.client_id)
                 )
-            # If the client subscribes a topic with use_history activated, create a new exchange in the server for it
-            if msg['op'] == 'subscribe' and cls.use_history:
-                # Connect with pika to create an exchange with history
+            # If the client subscribes a topic, create a new exchange in the server for it
+            if msg['op'] == 'subscribe':
+                # Connect with pika to create an exchange
                 connection = pika.BlockingConnection(
                     pika.ConnectionParameters(
                         host=self.conn.transport.current_host_and_port[0]
                     )
                 )
                 channel = connection.channel()
-                channel.exchange_declare(
-                    exchange=stomp_topic_name(msg['topic']),
-                    exchange_type='x-recent-history',
-                    auto_delete=True,
-                    arguments={
-                        "x-recent-history-length": cls.history_length
-                    }
-                )
+                # Use a topic exchange by default
+                exchange_type = 'topic'
+                exchange_args = None
+                # Use an x-recent-history exchange if using history
+                if cls.use_history:
+                    exchange_type = 'x-recent-history'
+                    exchange_args = { "x-recent-history-length": cls.history_length }
+                try:
+                    # Check if the exchange already exists
+                    channel.exchange_declare(
+                        exchange=stomp_topic_name(msg['topic']),
+                        passive=True
+                    )
+                except:
+                    # Create the exchange if it does't exist
+                    channel.exchange_declare(
+                        exchange=stomp_topic_name(msg['topic']),
+                        exchange_type=exchange_type,
+                        auto_delete=True,
+                        arguments=exchange_args
+                    )
                 connection.close()
             # If it's a client command, acknowledge the message
             if cls.client_command_destination in headers['destination']:

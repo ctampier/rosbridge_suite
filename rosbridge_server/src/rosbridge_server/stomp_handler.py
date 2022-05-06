@@ -51,7 +51,7 @@ class RosbridgeStompSocket(stomp.ConnectionListener):
     def connect(self):
         self.conn.connect(self.user, self.password, wait=True)
 
-    def on_connected(self, headers, body):
+    def on_connected(self, frame):
         cls = self.__class__
         parameters = {
             "fragment_timeout": cls.fragment_timeout,
@@ -85,11 +85,11 @@ class RosbridgeStompSocket(stomp.ConnectionListener):
         if cls.authenticate:
             rospy.loginfo("Awaiting proper authentication...")
 
-    def on_error(self, headers, body):
-        rospy.logerr('Received an error: "%s"', body)
-        if 'NOT_FOUND' in body:
+    def on_error(self, frame):
+        rospy.logerr('Received an error: "%s"', frame.body)
+        if 'NOT_FOUND' in frame.body:
             # Search for an exchange name in the error text
-            exchange_name = re.findall(r"exchange '([^']*)'", body)[0]
+            exchange_name = re.findall(r"exchange '([^']*)'", frame.body)[0]
             if exchange_name:
                 # Translate to topic name
                 topic_name = '/' + exchange_name.replace(".", "/")
@@ -97,9 +97,9 @@ class RosbridgeStompSocket(stomp.ConnectionListener):
                 msg = {'op': 'unsubscribe', 'topic': topic_name}
                 self.protocol.incoming(json.dumps(msg))
 
-    def on_message(self, headers, body):
+    def on_message(self, frame):
         cls = self.__class__
-        msg = json.loads(body)
+        msg = json.loads(frame.body)
         # check if we need to authenticate
         if cls.authenticate and not self.authenticated:
             try:
@@ -119,7 +119,7 @@ class RosbridgeStompSocket(stomp.ConnectionListener):
                 self.disconnect()
             except:
                 # proper error will be handled in the protocol class
-                self.protocol.incoming(body)
+                self.protocol.incoming(frame.body)
         # no authentication required
         else:
             # If the client advertises a topic, create a stomp-subscriber to it
@@ -167,10 +167,10 @@ class RosbridgeStompSocket(stomp.ConnectionListener):
                     )
                 connection.close()
             # If it's a client command, acknowledge the message
-            if cls.client_command_destination in headers['destination']:
-                self.conn.ack(headers['message-id'], cls.client_command_destination+str(self.protocol.client_id))
+            if cls.client_command_destination in frame.headers['destination']:
+                self.conn.ack(frame.headers['message-id'], cls.client_command_destination+str(self.protocol.client_id))
             # Forward the message to the protocol
-            self.protocol.incoming(body)
+            self.protocol.incoming(frame.body)
 
     def on_disconnected(self):
         if not hasattr(self, 'protocol'):

@@ -18,6 +18,8 @@ catkin_install_python(PROGRAMS
   scripts/rosbridge_stomp.py
   scripts/rosbridge_crossbar
   scripts/rosbridge_crossbar.py
+  scripts/rosbridge_amqp
+  scripts/rosbridge_amqp.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

@@ -1,0 +1,57 @@
+<launch>
+  <arg name="port" default="5672" />
+  <arg name="host" default="localhost" />
+
+  <arg name="user" default="guest" />
+  <arg name="password" default="guest" />
+
+  <arg name="reconnect_delay" default="1.0" />
+  <arg name="heartbeat_producer" default="0" />
+  <arg name="heartbeat_consumer" default="0" />
+  <arg name="use_history" default="false"/>
+  <arg name="history_length" default="100"/>
+
+  <arg name="fragment_timeout" default="600" />
+  <arg name="delay_between_messages" default="0" />
+  <arg name="max_message_size" default="None" />
+  <arg name="unregister_timeout" default="10" />
+
+  <arg name="authenticate" default="false" />
+
+  <arg name="topics_glob" default="[*]" />
+  <arg name="services_glob" default="[*]" />
+  <arg name="params_glob" default="[*]" />
+
+  <!-- Output: screen, log -->
+  <arg name="output" default="screen" />
+
+  <node name="rosbridge_amqp" pkg="rosbridge_server" type="rosbridge_amqp" output="$(arg output)">
+    <param name="authenticate" value="$(arg authenticate)" />
+    <param name="port" value="$(arg port)"/>
+    <param name="host" value="$(arg host)"/>
+    <param name="user" value="$(arg user)"/>
+    <param name="password" value="$(arg password)"/>
+
+    <param name="reconnect_delay" value="$(arg reconnect_delay)"/>
+    <param name="heartbeat_producer" value="$(arg heartbeat_producer)"/>
+    <param name="heartbeat_consumer" value="$(arg heartbeat_consumer)"/>
+    <param name="use_history" value="$(arg use_history)"/>
+    <param name="history_length" type="int" value="$(arg history_length)"/>
+    
+    <param name="fragment_timeout" value="$(arg fragment_timeout)"/>
+    <param name="delay_between_messages" value="$(arg delay_between_messages)"/>
+    <param name="max_message_size" value="$(arg max_message_size)"/>
+    <param name="unregister_timeout" value="$(arg unregister_timeout)"/>
+
+    <param name="topics_glob" value="$(arg topics_glob)"/>
+    <param name="services_glob" value="$(arg services_glob)"/>
+    <param name="params_glob" value="$(arg params_glob)"/>
+  </node>
+
+
+  <node name="rosapi" pkg="rosapi" type="rosapi_node" output="$(arg output)">
+    <param name="topics_glob" value="$(arg topics_glob)"/>
+    <param name="services_glob" value="$(arg services_glob)"/>
+    <param name="params_glob" value="$(arg params_glob)"/>
+  </node>
+</launch>
